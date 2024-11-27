@@ -54,6 +54,10 @@ class InkEditor extends AnnotationEditor {
 
   #requestFrameCallback = null;
 
+  #title = null;
+
+  #contents = null;
+
   static _defaultColor = null;
 
   static _defaultOpacity = 1;
@@ -78,6 +82,9 @@ class InkEditor extends AnnotationEditor {
     this.x = 0;
     this.y = 0;
     this._willKeepAspectRatio = true;
+    // These are added to support cutomized popup.
+    this.#title = params.title | null;
+    this.#contents = params.contents | null;
   }
 
   /** @inheritdoc */
@@ -1229,6 +1236,8 @@ class InkEditor extends AnnotationEditor {
       rect,
       rotation: this.rotation,
       structTreeParentId: this._structTreeParentId,
+      title: this.#title || undefined,
+      contents: this.#contents || undefined,
     };
   }
 }

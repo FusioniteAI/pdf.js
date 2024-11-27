@@ -4683,7 +4683,7 @@ class HighlightAnnotation extends MarkupAnnotation {
   }
 
   static createNewDict(annotation, xref, { apRef, ap }) {
-    const { color, oldAnnotation, opacity, rect, rotation, user, quadPoints } =
+    const { color, oldAnnotation, opacity, rect, rotation, user, quadPoints, title, contents } =
       annotation;
     const highlight = oldAnnotation || new Dict(xref);
     highlight.set("Type", Name.get("Annot"));
@@ -4708,8 +4708,11 @@ class HighlightAnnotation extends MarkupAnnotation {
     // Opacity.
     highlight.set("CA", opacity);
 
-    if (user) {
-      highlight.set("T", stringToAsciiOrUTF16BE(user));
+    if (!!title || !!user) {
+      highlight.set("T", stringToAsciiOrUTF16BE(title || user));
+    }
+    if (!!contents) {
+      highlight.set("Contents", stringToAsciiOrUTF16BE(contents));
     }
 
     if (apRef || ap) {

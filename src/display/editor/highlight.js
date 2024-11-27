@@ -72,6 +72,10 @@ class HighlightEditor extends AnnotationEditor {
 
   #methodOfCreation = "";
 
+  #title = null;
+
+  #contents = null;
+
   static _defaultColor = null;
 
   static _defaultOpacity = 1;
@@ -111,6 +115,9 @@ class HighlightEditor extends AnnotationEditor {
     this.#methodOfCreation = params.methodOfCreation || "";
     this.#text = params.text || "";
     this._isDraggable = false;
+    // These are added to support cutomized popup.
+    this.#title = params.title || null;
+    this.#contents = params.contents || null;
 
     if (params.highlightId > -1) {
       this.#isFreeHighlight = true;
@@ -927,6 +934,8 @@ class HighlightEditor extends AnnotationEditor {
       rect,
       rotation: this.#getRotation(),
       structTreeParentId: this._structTreeParentId,
+      title: this.#title || undefined,
+      contents: this.#contents || undefined,
     };
 
     if (this.annotationElementId && !this.#hasElementChanged(serialized)) {
