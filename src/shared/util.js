@@ -363,6 +363,7 @@ function getVerbosityLevel() {
 // end users.
 function info(msg) {
   if (verbosity >= VerbosityLevel.INFOS) {
+    // eslint-disable-next-line no-console
     console.log(`Info: ${msg}`);
   }
 }
@@ -370,6 +371,7 @@ function info(msg) {
 // Non-fatal warnings.
 function warn(msg) {
   if (verbosity >= VerbosityLevel.WARNINGS) {
+    // eslint-disable-next-line no-console
     console.log(`Warning: ${msg}`);
   }
 }
@@ -620,6 +622,14 @@ class FeatureTest {
       this,
       "isOffscreenCanvasSupported",
       typeof OffscreenCanvas !== "undefined"
+    );
+  }
+
+  static get isImageDecoderSupported() {
+    return shadow(
+      this,
+      "isImageDecoderSupported",
+      typeof ImageDecoder !== "undefined"
     );
   }
 
@@ -1065,21 +1075,12 @@ function normalizeUnicode(str) {
 function getUuid() {
   if (
     (typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")) ||
-    (typeof crypto !== "undefined" && typeof crypto?.randomUUID === "function")
+    typeof crypto.randomUUID === "function"
   ) {
     return crypto.randomUUID();
   }
   const buf = new Uint8Array(32);
-  if (
-    typeof crypto !== "undefined" &&
-    typeof crypto?.getRandomValues === "function"
-  ) {
-    crypto.getRandomValues(buf);
-  } else {
-    for (let i = 0; i < 32; i++) {
-      buf[i] = Math.floor(Math.random() * 255);
-    }
-  }
+  crypto.getRandomValues(buf);
   return bytesToString(buf);
 }
 

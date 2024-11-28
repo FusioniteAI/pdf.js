@@ -56,7 +56,6 @@ import {
   NodeCanvasFactory,
   NodeCMapReaderFactory,
   NodeFilterFactory,
-  NodePackages,
   NodeStandardFontDataFactory,
 } from "display-node_utils";
 import { CanvasGraphics } from "./canvas.js";
@@ -178,9 +177,21 @@ const DefaultStandardFontDataFactory =
  *   `OffscreenCanvas` in the worker. Primarily used to improve performance of
  *   image conversion/rendering.
  *   The default value is `true` in web environments and `false` in Node.js.
- * @property {boolean} [isChrome] - Determines if we can use bmp ImageDecoder.
- *   NOTE: Temporary option until [https://issues.chromium.org/issues/374807001]
- *   is fixed.
+ * @property {boolean} [isImageDecoderSupported] - Determines if we can use
+ *   `ImageDecoder` in the worker. Primarily used to improve performance of
+ *   image conversion/rendering.
+ *   The default value is `true` in web environments and `false` in Node.js.
+ *
+ *   NOTE: Also temporarily disabled in Chromium browsers, until we no longer
+ *   support the affected browser versions, because of various bugs:
+ *
+ *    - Crashes when using the BMP decoder with huge images, e.g. issue6741.pdf;
+ *      see https://issues.chromium.org/issues/374807001
+ *
+ *    - Broken images when using the JPEG decoder with images that have custom
+ *      colour profiles, e.g. GitHub discussion 19030;
+ *      see https://issues.chromium.org/issues/378869810
+ *
  * @property {number} [canvasMaxAreaInBytes] - The integer value is used to
  *   know when an image must be resized (uses `OffscreenCanvas` in the worker).
  *   If it's -1 then a possibly slow algorithm is used to guess the max value.
@@ -285,13 +296,16 @@ function getDocument(src = {}) {
     typeof src.isOffscreenCanvasSupported === "boolean"
       ? src.isOffscreenCanvasSupported
       : !isNodeJS;
-  const isChrome =
-    typeof src.isChrome === "boolean"
-      ? src.isChrome
-      : (typeof PDFJSDev === "undefined" || !PDFJSDev.test("MOZCENTRAL")) &&
-        !FeatureTest.platform.isFirefox &&
-        typeof window !== "undefined" &&
-        !!window?.chrome;
+  const isImageDecoderSupported =
+    // eslint-disable-next-line no-nested-ternary
+    typeof src.isImageDecoderSupported === "boolean"
+      ? src.isImageDecoderSupported
+      : // eslint-disable-next-line no-nested-ternary
+        typeof PDFJSDev !== "undefined" && PDFJSDev.test("MOZCENTRAL")
+        ? true
+        : typeof PDFJSDev !== "undefined" && PDFJSDev.test("CHROME")
+          ? false
+          : !isNodeJS && (FeatureTest.platform.isFirefox || !globalThis.chrome);
   const canvasMaxAreaInBytes = Number.isInteger(src.canvasMaxAreaInBytes)
     ? src.canvasMaxAreaInBytes
     : -1;
@@ -396,7 +410,7 @@ function getDocument(src = {}) {
       ignoreErrors,
       isEvalSupported,
       isOffscreenCanvasSupported,
-      isChrome,
+      isImageDecoderSupported,
       canvasMaxAreaInBytes,
       fontExtraProperties,
       useSystemFonts,
@@ -451,15 +465,20 @@ function getDocument(src = {}) {
           PDFJSDev.test("GENERIC") &&
           isNodeJS
         ) {
-          const isFetchSupported =
-            typeof fetch !== "undefined" &&
-            typeof Response !== "undefined" &&
-            "body" in Response.prototype;
-
-          NetworkStream =
-            isFetchSupported && isValidFetchUrl(url)
-              ? PDFFetchStream
-              : PDFNodeStream;
+          if (isValidFetchUrl(url)) {
+            if (
+              typeof fetch === "undefined" ||
+              typeof Response === "undefined" ||
+              !("body" in Response.prototype)
+            ) {
+              throw new Error(
+                "getDocument - the Fetch API was disabled in Node.js, see `--no-experimental-fetch`."
+              );
+            }
+            NetworkStream = PDFFetchStream;
+          } else {
+            NetworkStream = PDFNodeStream;
+          }
         } else {
           NetworkStream = isValidFetchUrl(url)
             ? PDFFetchStream
@@ -2137,14 +2156,6 @@ class PDFWorker {
    * @type {Promise<void>}
    */
   get promise() {
-    if (
-      typeof PDFJSDev !== "undefined" &&
-      PDFJSDev.test("GENERIC") &&
-      isNodeJS
-    ) {
-      // Ensure that all Node.js packages/polyfills have loaded.
-      return Promise.all([NodePackages.promise, this._readyCapability.promise]);
-    }
     return this._readyCapability.promise;
   }
 

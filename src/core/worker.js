@@ -34,7 +34,7 @@ import {
   getNewAnnotationsMap,
   XRefParseException,
 } from "./core_utils.js";
-import { Dict, isDict, Ref } from "./primitives.js";
+import { Dict, isDict, Ref, RefSetCache } from "./primitives.js";
 import { LocalPdfManager, NetworkPdfManager } from "./pdf_manager.js";
 import { AnnotationFactory } from "./annotation.js";
 import { clearGlobalCaches } from "./cleanup_helper.js";
@@ -189,7 +189,7 @@ class WorkerMessageHandler {
       return { numPages, fingerprints, htmlForXfa };
     }
 
-    function getPdfManager({
+    async function getPdfManager({
       data,
       password,
       disableAutoFetch,
@@ -211,32 +211,20 @@ class WorkerMessageHandler {
         password,
         rangeChunkSize,
       };
-      const pdfManagerCapability = Promise.withResolvers();
-      let newPdfManager;
 
       if (data) {
-        try {
-          pdfManagerArgs.source = data;
+        pdfManagerArgs.source = data;
 
-          newPdfManager = new LocalPdfManager(pdfManagerArgs);
-          pdfManagerCapability.resolve(newPdfManager);
-        } catch (ex) {
-          pdfManagerCapability.reject(ex);
-        }
-        return pdfManagerCapability.promise;
+        return new LocalPdfManager(pdfManagerArgs);
       }
+      const pdfStream = new PDFWorkerStream(handler),
+        fullRequest = pdfStream.getFullReader();
 
-      let pdfStream,
+      const pdfManagerCapability = Promise.withResolvers();
+      let newPdfManager,
         cachedChunks = [],
         loaded = 0;
-      try {
-        pdfStream = new PDFWorkerStream(handler);
-      } catch (ex) {
-        pdfManagerCapability.reject(ex);
-        return pdfManagerCapability.promise;
-      }
 
-      const fullRequest = pdfStream.getFullReader();
       fullRequest.headersReady
         .then(function () {
           if (!fullRequest.isRangeSupported) {
@@ -315,7 +303,7 @@ class WorkerMessageHandler {
         cancelXHRs = null;
       });
 
-      cancelXHRs = function (reason) {
+      cancelXHRs = reason => {
         pdfStream.cancelAllRequests(reason);
       };
 
@@ -540,6 +528,7 @@ class WorkerMessageHandler {
           pdfManager.ensureDoc("linearization"),
           pdfManager.ensureCatalog("structTreeRoot"),
         ];
+        const changes = new RefSetCache();
         const promises = [];
 
         const newAnnotationsByPage = !isPureXfa
@@ -590,7 +579,13 @@ class WorkerMessageHandler {
               pdfManager.getPage(pageIndex).then(page => {
                 const task = new WorkerTask(`Save (editor): page ${pageIndex}`);
                 return page
-                  .saveNewAnnotations(handler, task, annotations, imagePromises)
+                  .saveNewAnnotations(
+                    handler,
+                    task,
+                    annotations,
+                    imagePromises,
+                    changes
+                  )
                   .finally(function () {
                     finishWorkerTask(task);
                   });
@@ -600,26 +595,24 @@ class WorkerMessageHandler {
           if (structTreeRoot === null) {
             // No structTreeRoot exists, so we need to create one.
             promises.push(
-              Promise.all(newAnnotationPromises).then(async newRefs => {
+              Promise.all(newAnnotationPromises).then(async () => {
                 await StructTreeRoot.createStructureTree({
                   newAnnotationsByPage,
                   xref,
                   catalogRef,
                   pdfManager,
-                  newRefs,
+                  changes,
                 });
-                return newRefs;
               })
             );
           } else if (structTreeRoot) {
             promises.push(
-              Promise.all(newAnnotationPromises).then(async newRefs => {
+              Promise.all(newAnnotationPromises).then(async () => {
                 await structTreeRoot.updateStructureTree({
                   newAnnotationsByPage,
                   pdfManager,
-                  newRefs,
+                  changes,
                 });
-                return newRefs;
               })
             );
           }
@@ -633,7 +626,7 @@ class WorkerMessageHandler {
               pdfManager.getPage(pageIndex).then(function (page) {
                 const task = new WorkerTask(`Save: page ${pageIndex}`);
                 return page
-                  .save(handler, task, annotationStorage)
+                  .save(handler, task, annotationStorage, changes)
                   .finally(function () {
                     finishWorkerTask(task);
                   });
@@ -643,26 +636,21 @@ class WorkerMessageHandler {
         }
         const refs = await Promise.all(promises);
 
-        let newRefs = [];
         let xfaData = null;
         if (isPureXfa) {
           xfaData = refs[0];
           if (!xfaData) {
             return stream.bytes;
           }
-        } else {
-          newRefs = refs.flat(2);
-
-          if (newRefs.length === 0) {
-            // No new refs so just return the initial bytes
-            return stream.bytes;
-          }
+        } else if (changes.size === 0) {
+          // No new refs so just return the initial bytes
+          return stream.bytes;
         }
 
         const needAppearances =
           acroFormRef &&
           acroForm instanceof Dict &&
-          newRefs.some(ref => ref.needAppearances);
+          changes.values().some(ref => ref.needAppearances);
 
         const xfa = (acroForm instanceof Dict && acroForm.get("XFA")) || null;
         let xfaDatasetsRef = null;
@@ -688,11 +676,11 @@ class WorkerMessageHandler {
           const infoObj = Object.create(null);
           const xrefInfo = xref.trailer.get("Info") || null;
           if (xrefInfo instanceof Dict) {
-            xrefInfo.forEach((key, value) => {
+            for (const [key, value] of xrefInfo) {
               if (typeof value === "string") {
                 infoObj[key] = stringToPDFString(value);
               }
-            });
+            }
           }
 
           newXrefInfo = {
@@ -712,7 +700,7 @@ class WorkerMessageHandler {
         return incrementalUpdate({
           originalData: stream.bytes,
           xrefInfo: newXrefInfo,
-          newRefs,
+          changes,
           xref,
           hasXfa: !!xfa,
           xfaDatasetsRef,

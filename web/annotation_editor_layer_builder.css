@@ -170,10 +170,6 @@
     cursor: move;
   }
 
-  &.moving {
-    touch-action: none;
-  }
-
   &.selectedEditor {
     border: var(--focus-outline);
     outline: var(--focus-outline-around);
@@ -308,6 +304,10 @@
       align-items: center;
       gap: 0;
       height: 100%;
+
+      button {
+        padding: 0;
+      }
 
       .divider {
         width: 0;

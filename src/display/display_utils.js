@@ -411,8 +411,14 @@ function noContextMenu(e) {
   e.preventDefault();
 }
 
+function stopEvent(e) {
+  e.preventDefault();
+  e.stopPropagation();
+}
+
 // Deprecated API function -- display regardless of the `verbosity` setting.
 function deprecated(details) {
+  // eslint-disable-next-line no-console
   console.log("Deprecated API usage: " + details);
 }
 
@@ -656,5 +662,6 @@ export {
   RenderingCancelledException,
   setLayerDimensions,
   StatTimer,
+  stopEvent,
   SVG_NS,
 };

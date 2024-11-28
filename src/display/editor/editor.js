@@ -23,9 +23,9 @@ import {
   KeyboardManager,
 } from "./tools.js";
 import { FeatureTest, shadow, unreachable } from "../../shared/util.js";
+import { noContextMenu, stopEvent } from "../display_utils.js";
 import { AltText } from "./alt_text.js";
 import { EditorToolbar } from "./toolbar.js";
-import { noContextMenu } from "../display_utils.js";
 
 /**
  * @typedef {Object} AnnotationEditorParameters
@@ -48,9 +48,15 @@ class AnnotationEditor {
 
   #disabled = false;
 
+  #dragPointerId = null;
+
+  #dragPointerType = "";
+
   #keepAspectRatio = false;
 
   #resizersDiv = null;
+
+  #lastPointerCoords = null;
 
   #savedDimensions = null;
 
@@ -736,6 +742,7 @@ class AnnotationEditor {
 
     const savedDraggable = this._isDraggable;
     this._isDraggable = false;
+    this.#lastPointerCoords = [event.screenX, event.screenY];
 
     const ac = new AbortController();
     const signal = this._uiManager.combinedSignal(ac);
@@ -745,6 +752,11 @@ class AnnotationEditor {
       "pointermove",
       this.#resizerPointermove.bind(this, name),
       { passive: true, capture: true, signal }
+    );
+    window.addEventListener(
+      "touchmove",
+      stopEvent /* Prevent the page from scrolling */,
+      { passive: false, signal }
     );
     window.addEventListener("contextmenu", noContextMenu, { signal });
     const savedX = this.x;
@@ -886,10 +898,23 @@ class AnnotationEditor {
     let ratioX = 1;
     let ratioY = 1;
 
-    let [deltaX, deltaY] = this.screenToPageTranslation(
-      event.movementX,
-      event.movementY
-    );
+    let deltaX, deltaY;
+
+    if (!event.fromKeyboard) {
+      // We can't use event.movementX/Y because they're not reliable:
+      //  https://developer.mozilla.org/en-US/docs/Web/API/MouseEvent/movementX
+      // (it was buggy on a laptop with a touch screen).
+      const { screenX, screenY } = event;
+      const [lastScreenX, lastScreenY] = this.#lastPointerCoords;
+      [deltaX, deltaY] = this.screenToPageTranslation(
+        screenX - lastScreenX,
+        screenY - lastScreenY
+      );
+      this.#lastPointerCoords[0] = screenX;
+      this.#lastPointerCoords[1] = screenY;
+    } else {
+      ({ deltaX, deltaY } = event);
+    }
     [deltaX, deltaY] = invTransf(deltaX / parentWidth, deltaY / parentHeight);
 
     if (isDiagonal) {
@@ -1114,38 +1139,67 @@ class AnnotationEditor {
 
     const ac = new AbortController();
     const signal = this._uiManager.combinedSignal(ac);
-
-    if (isSelected) {
-      this.div.classList.add("moving");
-      this.#prevDragX = event.clientX;
-      this.#prevDragY = event.clientY;
-      const pointerMoveCallback = e => {
-        const { clientX: x, clientY: y } = e;
-        const [tx, ty] = this.screenToPageTranslation(
-          x - this.#prevDragX,
-          y - this.#prevDragY
-        );
-        this.#prevDragX = x;
-        this.#prevDragY = y;
-        this._uiManager.dragSelectedEditors(tx, ty);
-      };
-      window.addEventListener("pointermove", pointerMoveCallback, {
-        passive: true,
-        capture: true,
-        signal,
-      });
-    }
-
-    const pointerUpCallback = () => {
+    const opts = { capture: true, passive: false, signal };
+    const cancelDrag = e => {
       ac.abort();
-      if (isSelected) {
-        this.div.classList.remove("moving");
-      }
 
+      this.#dragPointerId = null;
       this.#hasBeenClicked = false;
       if (!this._uiManager.endDragSession()) {
-        this.#selectOnPointerEvent(event);
+        this.#selectOnPointerEvent(e);
       }
+    };
+
+    if (isSelected) {
+      this.#prevDragX = event.clientX;
+      this.#prevDragY = event.clientY;
+      this.#dragPointerId = event.pointerId;
+      this.#dragPointerType = event.pointerType;
+      window.addEventListener(
+        "pointermove",
+        e => {
+          const { clientX: x, clientY: y, pointerId } = e;
+          if (pointerId !== this.#dragPointerId) {
+            stopEvent(e);
+            return;
+          }
+          const [tx, ty] = this.screenToPageTranslation(
+            x - this.#prevDragX,
+            y - this.#prevDragY
+          );
+          this.#prevDragX = x;
+          this.#prevDragY = y;
+          this._uiManager.dragSelectedEditors(tx, ty);
+        },
+        opts
+      );
+      window.addEventListener(
+        "touchmove",
+        stopEvent /* Prevent the page from scrolling */,
+        opts
+      );
+      window.addEventListener(
+        "pointerdown",
+        // If the user drags with one finger and then clicks with another.
+        e => {
+          if (e.isPrimary && e.pointerType === this.#dragPointerType) {
+            // We cannot have two primaries at the same time.
+            // It's possible to be in this state with Firefox and Gnome when
+            // trying to drag with three fingers (see bug 1933716).
+            cancelDrag(e);
+          }
+          stopEvent(e);
+        },
+        opts
+      );
+    }
+
+    const pointerUpCallback = e => {
+      if (!this.#dragPointerId || this.#dragPointerId === e.pointerId) {
+        cancelDrag(e);
+        return;
+      }
+      stopEvent(e);
     };
     window.addEventListener("pointerup", pointerUpCallback, { signal });
     // If the user is using alt+tab during the dragging session, the pointerup
@@ -1559,8 +1613,9 @@ class AnnotationEditor {
       return;
     }
     this.#resizerPointermove(this.#focusedResizerName, {
-      movementX: x,
-      movementY: y,
+      deltaX: x,
+      deltaY: y,
+      fromKeyboard: true,
     });
   }
 
